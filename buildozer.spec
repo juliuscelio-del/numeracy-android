@@ -13,9 +13,12 @@ icon.filename = %(source.dir)s/icon.png
 android.permissions = INTERNET,ACCESS_NETWORK_STATE,ACCESS_WIFI_STATE,WAKE_LOCK
 android.api = 33
 android.minapi = 24
+android.ndk = 25b
 android.archs = arm64-v8a, armeabi-v7a
 android.accept_sdk_license = True
 android.extra_manifest_application_arguments = ./extra_manifest_application_arguments.xml
+
+p4a.branch = v2024.01.21
 
 [buildozer]
 log_level = 2
