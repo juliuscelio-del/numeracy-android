@@ -62,6 +62,8 @@ class Host:
         if self.httpd is None:
             raise OSError("No free port between %d and %d" % (port, port + 9))
         threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
+        self.beacon = Beacon(self)
+        self.beacon.start()
 
     def ips(self):
         try:
@@ -79,7 +81,19 @@ class Host:
     def test_url(self):
         return "http://127.0.0.1:%d/test/host" % self.port
 
+    def name_url(self):
+        """Name-based address (Mac only): keeps working when the IP changes."""
+        if sys.platform != "darwin":
+            return None
+        n = socket.gethostname()
+        n = n if n.lower().endswith(".local") else n + ".local"
+        return "http://%s:%d" % (n, self.port)
+
     def stop(self):
+        try:
+            self.beacon.stop_flag.set()
+        except Exception:
+            pass
         try:
             self.srv._write_now()
         except Exception:
@@ -107,3 +121,93 @@ def clean_address(text):
         head, _, tail = t.partition(rest)
         t = head + rest + ":%d" % DEFAULT_PORT + tail
     return t
+
+
+# ---------------------------------------------------------------- finding the teacher without typing an IP
+import socket, json, time
+DISCOVERY_PORT = 48765
+MAGIC = "gnhs-numeracy-v1"
+
+
+def _broadcast_targets(ips):
+    t = ["255.255.255.255"]
+    for ip in ips:
+        p = ip.split(".")
+        if len(p) == 4 and not ip.startswith("127."):
+            t.append(".".join(p[:3] + ["255"]))
+    return list(dict.fromkeys(t))
+
+
+def computer_name():
+    n = socket.gethostname() or "Teacher"
+    return n[:-6] if n.lower().endswith(".local") else n
+
+
+class Beacon(threading.Thread):
+    """The teacher's app shouts 'I am here, port N' on the local network every 2 seconds."""
+
+    def __init__(self, host, name=None):
+        super().__init__(daemon=True)
+        self.host = host
+        self.name = name or computer_name()
+        self.stop_flag = threading.Event()
+
+    def run(self):
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        except Exception:
+            return
+        while not self.stop_flag.is_set():
+            payload = json.dumps({"m": MAGIC, "name": self.name, "port": self.host.port}).encode()
+            try:
+                targets = _broadcast_targets(self.host.ips())
+            except Exception:
+                targets = ["255.255.255.255"]
+            for t in targets:
+                try:
+                    s.sendto(payload, (t, DISCOVERY_PORT))
+                except OSError:
+                    pass
+            self.stop_flag.wait(2.0)
+        try:
+            s.close()
+        except Exception:
+            pass
+
+
+def discover(timeout=4.0):
+    """Listen for teachers. Returns [(name, 'http://ip:port'), ...]."""
+    found = {}
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+        except Exception:
+            pass
+        s.bind(("", DISCOVERY_PORT))
+        s.settimeout(0.5)
+        end = time.time() + timeout
+        while time.time() < end:
+            try:
+                data, addr = s.recvfrom(2048)
+            except socket.timeout:
+                continue
+            except OSError:
+                break
+            try:
+                j = json.loads(data.decode("utf-8", "replace"))
+                if j.get("m") != MAGIC:
+                    continue
+                found["http://%s:%d" % (addr[0], int(j.get("port", DEFAULT_PORT)))] = str(j.get("name", "Teacher"))[:40]
+            except Exception:
+                continue
+    except Exception:
+        pass
+    finally:
+        try:
+            s.close()
+        except Exception:
+            pass
+    return [(n, u) for u, n in found.items()]

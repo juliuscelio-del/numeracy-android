@@ -1,7 +1,7 @@
 """Guadalupe NHS Numeracy Drill: Android app (Kivy).
 Start screen: TEACHER (PIN, this phone runs the drill) or STUDENT (join the teacher's address).
 The drill itself is a web page, shown inside a WebView."""
-import os, sys, traceback
+import os, sys, threading, traceback
 from kivy.app import App
 from kivy.core.window import Window
 from kivy.clock import Clock
@@ -48,6 +48,28 @@ def keep_screen_on():
         except Exception:
             traceback.print_exc()
     _do()
+
+
+_mlock = {"lock": None}
+
+
+def multicast_lock(on):
+    """Some phones ignore broadcast packets unless the app holds this lock."""
+    if not ANDROID:
+        return
+    try:
+        if on:
+            Context = autoclass("android.content.Context")
+            wm = _activity().getSystemService(Context.WIFI_SERVICE)
+            lk = wm.createMulticastLock("numeracy")
+            lk.setReferenceCounted(False)
+            lk.acquire()
+            _mlock["lock"] = lk
+        elif _mlock["lock"] is not None:
+            _mlock["lock"].release()
+            _mlock["lock"] = None
+    except Exception:
+        traceback.print_exc()
 
 
 def get_ips():
@@ -216,8 +238,44 @@ class NumeracyApp(App):
             pass
         b = box()
         b.add_widget(text("Join the teacher's drill", 22, INK, True))
-        b.add_widget(text("Type the address shown on the teacher's screen\n(example: 192.168.1.5:8000).\nUse the same Wi-Fi as the teacher.", 14, MUTED))
-        e = field("192.168.1.5:8000", value=last or "192.168.")
+        status = text("Searching for your teacher...", 14, MUTED)
+        b.add_widget(status)
+        found = BoxLayout(orientation="vertical", spacing=dp(8), size_hint_y=None)
+        found.bind(minimum_height=found.setter("height"))
+        b.add_widget(found)
+
+        def join_url(url):
+            try:
+                open(self._last_addr_file(), "w").write(url)
+            except Exception:
+                pass
+            open_webview(url)
+
+        def show(res, *_):
+            found.clear_widgets()
+            if res:
+                status.text = "Tap your teacher to join:"
+                for name, url in res:
+                    found.add_widget(big_button("%s  (%s)" % (name, url.replace("http://", "")), GREEN,
+                                                lambda u=url: join_url(u), 56))
+            else:
+                status.text = "No teacher found. Same Wi-Fi? Search again, or type the address."
+
+        def scan():
+            found.clear_widgets()
+            status.text = "Searching for your teacher..."
+
+            def work():
+                multicast_lock(True)
+                try:
+                    res = core.discover(4.0)
+                finally:
+                    multicast_lock(False)
+                Clock.schedule_once(lambda dt: show(res), 0)
+            threading.Thread(target=work, daemon=True).start()
+        b.add_widget(big_button("Search again", BLUE, scan, 52))
+        b.add_widget(text("Or type the address:", 13, MUTED))
+        e = field("192.168.1.5:8000", value=last.replace("http://", "") or "192.168.")
         b.add_widget(e)
         err = text("", 14, RED)
         b.add_widget(err)
@@ -227,16 +285,13 @@ class NumeracyApp(App):
             if not url or url.endswith("192.168.:8000"):
                 err.text = "Please type the full address."
                 return
-            try:
-                open(self._last_addr_file(), "w").write(e.text.strip())
-            except Exception:
-                pass
-            open_webview(url)
+            join_url(url)
         e.bind(on_text_validate=lambda *_: join())
-        b.add_widget(big_button("Join", GREEN, join))
-        b.add_widget(big_button("Back", GREY, self.show_home, 52))
+        b.add_widget(big_button("Join", GREEN, join, 56))
+        b.add_widget(big_button("Back", GREY, self.show_home, 48))
         b.add_widget(Label())
         self.set_screen("student", b)
+        scan()
 
     def show_teacher_login(self):
         try:

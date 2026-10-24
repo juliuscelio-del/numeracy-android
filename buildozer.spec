@@ -10,7 +10,7 @@ orientation = portrait
 fullscreen = 0
 icon.filename = %(source.dir)s/icon.png
 
-android.permissions = INTERNET,ACCESS_NETWORK_STATE,ACCESS_WIFI_STATE,WAKE_LOCK
+android.permissions = INTERNET,ACCESS_NETWORK_STATE,ACCESS_WIFI_STATE,CHANGE_WIFI_MULTICAST_STATE,WAKE_LOCK
 android.api = 33
 android.minapi = 24
 android.ndk = 25b
@@ -18,6 +18,7 @@ android.archs = arm64-v8a, armeabi-v7a
 android.accept_sdk_license = True
 android.extra_manifest_application_arguments = ./extra_manifest_application_arguments.xml
 
+# Pin the Android build toolkit to a release that still uses Python 3.11 (the newest one needs Python 3.14 wheels that do not exist yet)
 p4a.branch = v2024.01.21
 
 [buildozer]
