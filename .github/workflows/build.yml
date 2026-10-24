@@ -8,12 +8,36 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
-      - uses: ArtemSBulgakov/buildozer-action@v1
-        id: buildozer
+
+      - uses: actions/setup-python@v5
         with:
-          command: buildozer android debug
-          workdir: .
+          python-version: "3.11"
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y git zip unzip autoconf automake libtool pkg-config \
+            zlib1g-dev libncurses5-dev libncursesw5-dev libtinfo5 cmake libffi-dev libssl-dev
+          python -m pip install --upgrade pip
+          python -m pip install buildozer "cython==0.29.36" virtualenv setuptools
+
+      - name: Cache Android tools
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.buildozer
+            .buildozer
+          key: buildozer-${{ hashFiles('buildozer.spec') }}
+
+      - name: Build the APK
+        run: buildozer -v android debug
+
       - uses: actions/upload-artifact@v4
         with:
           name: Android-apk
-          path: ${{ steps.buildozer.outputs.filename }}
+          path: bin/*.apk
