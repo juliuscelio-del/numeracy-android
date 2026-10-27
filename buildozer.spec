@@ -20,6 +20,9 @@ android.archs = arm64-v8a, armeabi-v7a
 android.accept_sdk_license = True
 android.extra_manifest_application_arguments = ./extra_manifest_application_arguments.xml
 
+# Release builds must produce an APK (newer Buildozer defaults to AAB)
+android.release_artifact = apk
+
 # Pin the Android build toolkit to a release that still uses Python 3.11 (the newest one needs Python 3.14 wheels that do not exist yet)
 p4a.branch = v2024.01.21
 

@@ -699,6 +699,10 @@ class NumeracyApp(App):
     def install_update(self):
         try:
             install_downloaded_apk(self._upd["id"])
+            # If the installer rejects the APK (for example it was signed with a different key),
+            # Android shows "App not installed" and this popup stays. Tell the user what to do.
+            self._upd_msg.text = ("If Android says \"App not installed\", delete Numeracy Drill, "
+                                  "then install the new version from the teacher's link once.")
         except Exception as ex:
             traceback.print_exc()
             self._upd_msg.text = "Could not open the installer:\n%s" % ex
