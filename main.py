@@ -1,7 +1,7 @@
 """Guadalupe NHS Numeracy Drill: Android app (Kivy).
 Start screen: TEACHER (PIN, this phone runs the drill) or STUDENT (join the teacher's address).
 The drill itself is a web page, shown inside a WebView."""
-import os, sys, threading, traceback
+import os, sys, threading, traceback, time
 from kivy.app import App
 from kivy.core.window import Window
 from kivy.clock import Clock
@@ -20,6 +20,8 @@ try:
 except ImportError:
     __version__ = "0.0.0"
 import updater
+
+SCAN_SECONDS = 15   # the "searching for updates" popup stays at least this long
 
 BLUE, GREEN, RED, PURPLE, GREY = "#2f6df6", "#1fc76a", "#ff5a5f", "#8b5cf6", "#7b8db3"
 INK, MUTED, BG = "#12306b", "#5f78a8", "#e4f1ff"
@@ -220,12 +222,14 @@ class NumeracyApp(App):
     def build(self):
         self.core_srv = None
         self.host = None
+        self._blocking = False          # True while an update popup is on screen
         self.sm = ScreenManager()
         for name in ("home", "student", "tlogin", "trun"):
             self.sm.add_widget(Screen(name=name))
         self.show_home()
-        self.check_update()
         Window.bind(on_keyboard=self.on_key)
+        # start the update check once the window is up (a popup can't open during build())
+        Clock.schedule_once(lambda dt: self.check_update(), 0.5)
         return self.sm
 
     # ---- screens
@@ -391,21 +395,38 @@ class NumeracyApp(App):
 
     # ---- updates
     def check_update(self):
-        def work():
-            info = updater.check(__version__)
-            if info:
-                Clock.schedule_once(lambda dt: self.offer_update(info), 0)
-        threading.Thread(target=work, daemon=True).start()
-
-    def offer_update(self, info):
-        if self.host is not None or _wv.get("view") is not None:
-            return  # never interrupt a running drill or an open page
         from kivy.uix.popup import Popup
         b = BoxLayout(orientation="vertical", padding=dp(16), spacing=dp(10))
-        b.add_widget(text("Version %s is available.\nThis tablet has %s." % (info["version"], __version__), 16, INK))
+        b.add_widget(text("Searching for updates...\nPlease wait.", 17, INK))
+        self._scan_popup = Popup(title="Checking for updates", content=b,
+                                 size_hint=(0.9, 0.35), auto_dismiss=False)
+        self._blocking = True
+        self._scan_popup.open()
+
+        def work():
+            t0 = time.time()
+            info = updater.check(__version__)
+            left = SCAN_SECONDS - (time.time() - t0)
+            if left > 0:
+                time.sleep(left)          # student waits the full scan time
+            Clock.schedule_once(lambda dt: self.scan_done(info), 0)
+        threading.Thread(target=work, daemon=True).start()
+
+    def scan_done(self, info):
+        self._scan_popup.dismiss()
+        self._blocking = False
+        if info:
+            self.offer_update(info)
+
+    def offer_update(self, info):
+        from kivy.uix.popup import Popup
+        b = BoxLayout(orientation="vertical", padding=dp(16), spacing=dp(10))
+        b.add_widget(text("Version %s is available.\nThis tablet has %s.\n\nPlease update to continue."
+                          % (info["version"], __version__), 16, INK))
+        b.add_widget(big_button("Update now", GREEN, lambda: open_url(info["url"]), 56))
+        # no Later button, and the popup stays open after tapping Update now
         p = Popup(title="Update available", content=b, size_hint=(0.9, 0.45), auto_dismiss=False)
-        b.add_widget(big_button("Update now", GREEN, lambda: (p.dismiss(), open_url(info["url"])), 56))
-        b.add_widget(big_button("Later", GREY, p.dismiss, 48))
+        self._blocking = True
         p.open()
 
     def popup_error(self, msg):
@@ -417,6 +438,8 @@ class NumeracyApp(App):
     def on_key(self, window, key, *args):
         if key != 27:
             return False
+        if self._blocking:
+            return True  # an update popup is open: Back does nothing
         if _wv.get("view") is not None:
             webview_back()
             return True
