@@ -630,9 +630,9 @@ class NumeracyApp(App):
 
     def offer_update(self, info):
         from kivy.uix.popup import Popup
-        self._upd = {"id": None, "ev": None, "state": "idle"}
+        self._upd = {"id": None, "ev": None, "state": "idle", "info": info}
         b = BoxLayout(orientation="vertical", padding=dp(16), spacing=dp(10))
-        self._upd_msg = text("Version %s is available.\nThis tablet has %s.\n\nPlease update to continue."
+        self._upd_msg = text("Version %s is available.\nThis tablet has %s.\n\nUpdating automatically..."
                              % (info["version"], __version__), 16, WHITE)
         b.add_widget(self._upd_msg)
         self._upd_btn = big_button("Update now", GREEN, lambda: self.update_tap(info), 56)
@@ -641,6 +641,8 @@ class NumeracyApp(App):
         p = Popup(title="Update available", content=b, size_hint=(0.9, 0.5), auto_dismiss=False)
         self._blocking = True
         p.open()
+        # start the download by itself, no tap needed
+        Clock.schedule_once(lambda dt: self.begin_update(info), 0.5)
 
     def update_tap(self, info):
         st = self._upd["state"]
@@ -658,6 +660,7 @@ class NumeracyApp(App):
         if not can_install_apks():
             self._upd_msg.text = ("One-time step: turn ON \"Allow from this source\" for this app, "
                                   "then come back and tap Update now.")
+            self._upd["state"] = "need_permission"
             open_install_permission_settings()
             return
         try:
@@ -730,6 +733,12 @@ class NumeracyApp(App):
 
     def on_pause(self):
         return True  # keep the server alive when the phone is switched to another app
+
+    def on_resume(self):
+        # back from the "Install unknown apps" settings screen: continue the update by itself
+        u = getattr(self, "_upd", None)
+        if u and u["state"] == "need_permission" and can_install_apks():
+            self.begin_update(u["info"])
 
     def on_stop(self):
         if self.host is not None:
