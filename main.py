@@ -26,6 +26,7 @@ import updater
 
 SCAN_SECONDS = 15   # the "searching for updates" popup stays at least this long
 CHECKING_TEXT = "Wait sa ha kai mangita sa ta sa updates"
+UPDATING_TEXT = "Paabot kadali sa downloadon pa ag updates"   # shown while the update downloads and installs
 DEBUG_UPDATER = False   # True: show why an update check failed. Set to False when everything works.
 
 BLUE, GREEN, RED, PURPLE, GREY = "#2f6df6", "#1fc76a", "#ff5a5f", "#8b5cf6", "#7b8db3"
@@ -669,7 +670,7 @@ class NumeracyApp(App):
         self._upd["state"] = "downloading"
         self._upd_btn.disabled = True
         self._upd_btn.text = "Downloading..."
-        self._upd_msg.text = "Downloading version %s...  0%%" % info["version"]
+        self._upd_msg.text = UPDATING_TEXT + "\n0%"
         self._upd["ev"] = Clock.schedule_interval(lambda dt: self.poll_update(info), 0.5)
 
     def poll_update(self, info):
@@ -680,14 +681,14 @@ class NumeracyApp(App):
             status, done, total = "failed", 0, 0
         if status == "running":
             pct = int(done * 100 / total) if total > 0 else 0
-            self._upd_msg.text = "Downloading version %s...  %d%%" % (info["version"], pct)
+            self._upd_msg.text = "%s\n%d%%" % (UPDATING_TEXT, pct)
             return None
         self._upd["ev"].cancel()
         self._upd_btn.disabled = False
         if status == "done":
             self._upd["state"] = "ready"
             self._upd_btn.text = "Install now"
-            self._upd_msg.text = "Download finished.\nTap Install on the next screen."
+            self._upd_msg.text = UPDATING_TEXT
             self.install_update()
         else:
             self._upd["state"] = "failed"
