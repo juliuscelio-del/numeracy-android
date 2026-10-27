@@ -1,15 +1,18 @@
 """Guadalupe NHS Numeracy Drill: Android app (Kivy).
 Start screen: TEACHER (PIN, this phone runs the drill) or STUDENT (join the teacher's address).
 The drill itself is a web page, shown inside a WebView."""
-import os, sys, threading, traceback, time
+import os, sys, threading, traceback, time, math, colorsys
 from kivy.app import App
 from kivy.core.window import Window
 from kivy.clock import Clock
 from kivy.metrics import dp, sp
+from kivy.graphics import Color, RoundedRectangle, Ellipse, Line, PushMatrix, PopMatrix, Rotate
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.label import Label
 from kivy.uix.button import Button
 from kivy.uix.textinput import TextInput
+from kivy.uix.widget import Widget
+from kivy.uix.modalview import ModalView
 from kivy.uix.screenmanager import ScreenManager, Screen
 from kivy.utils import get_color_from_hex as hexc
 
@@ -22,9 +25,12 @@ except ImportError:
 import updater
 
 SCAN_SECONDS = 15   # the "searching for updates" popup stays at least this long
+CHECKING_TEXT = "Wait sa ha kai mangita sa ta sa updates"
+DEBUG_UPDATER = True   # True: show why an update check failed. Set to False when everything works.
 
 BLUE, GREEN, RED, PURPLE, GREY = "#2f6df6", "#1fc76a", "#ff5a5f", "#8b5cf6", "#7b8db3"
 INK, MUTED, BG = "#12306b", "#5f78a8", "#e4f1ff"
+WHITE = "#ffffff"
 Window.clearcolor = hexc(BG)
 
 # ------------------------------------------------------------------ Android helpers (pyjnius)
@@ -216,6 +222,107 @@ def field(hint, password=False, value=""):
                      height=dp(56), font_size=sp(20), halign="center", padding=[dp(10), dp(14)])
 
 
+def hsv(h, s=0.75, v=1.0, a=1.0):
+    r, g, b = colorsys.hsv_to_rgb(h % 1.0, s, v)
+    return (r, g, b, a)
+
+
+class VibrantDialog(ModalView):
+    """Dark glassy card with a colour-cycling glow border, a spinning ring and bouncing dots."""
+
+    def __init__(self, message, **kw):
+        super().__init__(size_hint=(0.88, None), height=dp(310), auto_dismiss=False,
+                         background="", background_color=(0, 0, 0, 0),
+                         overlay_color=(0.05, 0.03, 0.16, 0.85), **kw)
+        self._t = 0.0
+        self._ev = None
+
+        card = BoxLayout(orientation="vertical", padding=dp(24), spacing=dp(14))
+        with card.canvas.before:
+            self._glow_c = Color(1, 0, 0.5, 0.9)
+            self._glow = RoundedRectangle(radius=[dp(32)])
+            Color(0.09, 0.06, 0.24, 1)
+            self._body = RoundedRectangle(radius=[dp(29)])
+            Color(1, 1, 1, 0.07)
+            self._shine = RoundedRectangle(radius=[dp(29), dp(29), 0, 0])
+        self._card = card
+
+        # spinning ring
+        self._ring = Widget(size_hint_y=None, height=dp(90))
+        with self._ring.canvas:
+            Color(1, 1, 1, 0.12)
+            self._ring_bg = Line(width=dp(5))
+            PushMatrix()
+            self._rot = Rotate(angle=0, origin=(0, 0))
+            self._arc_c = Color(1, 0, 0.5, 1)
+            self._arc = Line(width=dp(5), cap="round")
+            PopMatrix()
+        card.add_widget(self._ring)
+
+        # message
+        self._msg = Label(text=message, font_size=sp(19), bold=True, halign="center", valign="middle",
+                          color=(1, 1, 1, 1))
+        self._msg.bind(size=lambda w, s: setattr(w, "text_size", s))
+        card.add_widget(self._msg)
+
+        # bouncing dots
+        self._dots = Widget(size_hint_y=None, height=dp(28))
+        self._dot_c, self._dot_e = [], []
+        with self._dots.canvas:
+            for _ in range(3):
+                self._dot_c.append(Color(1, 1, 1, 1))
+                self._dot_e.append(Ellipse())
+        card.add_widget(self._dots)
+
+        card.bind(pos=self._layout, size=self._layout)
+        self.add_widget(card)
+        self.bind(on_dismiss=lambda *_: self._stop())
+
+    def open(self, *a, **kw):
+        super().open(*a, **kw)
+        if self._ev is None:
+            self._ev = Clock.schedule_interval(self._tick, 1 / 30.0)
+
+    def _stop(self):
+        if self._ev is not None:
+            self._ev.cancel()
+            self._ev = None
+
+    def _layout(self, *_):
+        c = self._card
+        g = dp(3)
+        self._glow.pos = (c.x - g, c.y - g)
+        self._glow.size = (c.width + 2 * g, c.height + 2 * g)
+        self._body.pos = c.pos
+        self._body.size = c.size
+        self._shine.pos = (c.x, c.center_y)
+        self._shine.size = (c.width, c.height / 2.0)
+
+    def _tick(self, dt):
+        self._t += dt
+        t = self._t
+        self._layout()
+        self._glow_c.rgba = hsv(t * 0.12, 0.8, 1, 0.9)
+        self._arc_c.rgba = hsv(t * 0.12 + 0.5, 0.7, 1, 1)
+        self._msg.color = hsv(t * 0.12 + 0.9, 0.16, 1, 1)
+
+        ring = self._ring
+        cx, cy = ring.center
+        r = min(ring.width, ring.height) / 2.0 - dp(6)
+        self._ring_bg.circle = (cx, cy, r)
+        self._arc.circle = (cx, cy, r, 0, 270)
+        self._rot.origin = (cx, cy)
+        self._rot.angle = -t * 360.0
+
+        d, gap = dp(13), dp(11)
+        x0 = self._dots.center_x - (3 * d + 2 * gap) / 2.0
+        for i in range(3):
+            bounce = max(0.0, math.sin(t * 5.0 - i * 0.7))
+            self._dot_c[i].rgba = hsv(t * 0.12 + i * 0.12, 0.7, 1, 0.45 + 0.55 * bounce)
+            self._dot_e[i].pos = (x0 + i * (d + gap), self._dots.y + dp(3) + bounce * dp(11))
+            self._dot_e[i].size = (d, d)
+
+
 class NumeracyApp(App):
     title = "Numeracy Drill"
 
@@ -395,11 +502,7 @@ class NumeracyApp(App):
 
     # ---- updates
     def check_update(self):
-        from kivy.uix.popup import Popup
-        b = BoxLayout(orientation="vertical", padding=dp(16), spacing=dp(10))
-        b.add_widget(text("Searching for updates...\nPlease wait.", 17, INK))
-        self._scan_popup = Popup(title="Checking for updates", content=b,
-                                 size_hint=(0.9, 0.35), auto_dismiss=False)
+        self._scan_popup = VibrantDialog(CHECKING_TEXT)
         self._blocking = True
         self._scan_popup.open()
 
@@ -417,12 +520,15 @@ class NumeracyApp(App):
         self._blocking = False
         if info:
             self.offer_update(info)
+        elif DEBUG_UPDATER:
+            self.popup_error("Update check (debug)\nThis app: %s\nLatest on GitHub: %s\nError: %s"
+                             % (__version__, updater.last_tag or "?", updater.last_error or "none"))
 
     def offer_update(self, info):
         from kivy.uix.popup import Popup
         b = BoxLayout(orientation="vertical", padding=dp(16), spacing=dp(10))
         b.add_widget(text("Version %s is available.\nThis tablet has %s.\n\nPlease update to continue."
-                          % (info["version"], __version__), 16, INK))
+                          % (info["version"], __version__), 16, WHITE))
         b.add_widget(big_button("Update now", GREEN, lambda: open_url(info["url"]), 56))
         # no Later button, and the popup stays open after tapping Update now
         p = Popup(title="Update available", content=b, size_hint=(0.9, 0.45), auto_dismiss=False)
@@ -431,7 +537,7 @@ class NumeracyApp(App):
 
     def popup_error(self, msg):
         from kivy.uix.popup import Popup
-        p = Popup(title="Numeracy Drill", content=text(msg, 15, INK), size_hint=(0.9, 0.4))
+        p = Popup(title="Numeracy Drill", content=text(msg, 15, WHITE), size_hint=(0.9, 0.4))
         p.open()
 
     # ---- phone Back button
