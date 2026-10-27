@@ -2,7 +2,8 @@ name: Build Android APK
 on:
   workflow_dispatch:
   push:
-    branches: [main]
+    branches: [main]      # test build only, no release
+    tags: ['v*']          # release
 jobs:
   android:
     runs-on: ubuntu-22.04
@@ -36,13 +37,6 @@ jobs:
           mkdir -p ~/.android
           echo "$KS" | base64 -d > ~/.android/debug.keystore
 
-      - name: Stamp version
-        id: ver
-        run: |
-          V=$(grep -E '^version *=' buildozer.spec | head -1 | cut -d= -f2 | tr -d ' ')
-          echo "__version__ = \"$V\"" > _version.py
-          echo "v=$V" >> "$GITHUB_OUTPUT"
-
       - name: Cache Android tools
         uses: actions/cache@v4
         with:
@@ -50,6 +44,17 @@ jobs:
             ~/.buildozer
             .buildozer
           key: buildozer-${{ hashFiles('buildozer.spec') }}
+
+      - name: Set version from tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: sed -i -E "s/^version *=.*/version = ${GITHUB_REF_NAME#v}/" buildozer.spec
+
+      - name: Stamp version
+        id: ver
+        run: |
+          V=$(grep -E '^version *=' buildozer.spec | head -1 | cut -d= -f2 | tr -d ' ')
+          echo "__version__ = \"$V\"" > _version.py
+          echo "v=$V" >> "$GITHUB_OUTPUT"
 
       - name: Build the APK
         run: buildozer -v android debug
@@ -60,6 +65,7 @@ jobs:
           path: bin/*.apk
 
       - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ steps.ver.outputs.v }}
