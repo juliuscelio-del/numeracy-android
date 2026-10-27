@@ -26,7 +26,7 @@ import updater
 
 SCAN_SECONDS = 15   # the "searching for updates" popup stays at least this long
 CHECKING_TEXT = "Wait sa ha kai mangita sa ta sa updates"
-DEBUG_UPDATER = True   # True: show why an update check failed. Set to False when everything works.
+DEBUG_UPDATER = False   # True: show why an update check failed. Set to False when everything works.
 
 BLUE, GREEN, RED, PURPLE, GREY = "#2f6df6", "#1fc76a", "#ff5a5f", "#8b5cf6", "#7b8db3"
 INK, MUTED, BG = "#12306b", "#5f78a8", "#e4f1ff"
