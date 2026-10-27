@@ -15,6 +15,12 @@ from kivy.utils import get_color_from_hex as hexc
 
 import app_core as core
 
+try:
+    from _version import __version__
+except ImportError:
+    __version__ = "0.0.0"
+import updater
+
 BLUE, GREEN, RED, PURPLE, GREY = "#2f6df6", "#1fc76a", "#ff5a5f", "#8b5cf6", "#7b8db3"
 INK, MUTED, BG = "#12306b", "#5f78a8", "#e4f1ff"
 Window.clearcolor = hexc(BG)
@@ -112,6 +118,20 @@ if ANDROID:
                 traceback.print_exc()
 
 
+def open_url(url):
+    """Open a link in the phone's own browser (used for downloading the update)."""
+    if not ANDROID:
+        import webbrowser
+        webbrowser.open(url)
+        return
+    try:
+        Intent = autoclass("android.content.Intent")
+        Uri = autoclass("android.net.Uri")
+        _activity().startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+    except Exception:
+        traceback.print_exc()
+
+
 @run_on_ui_thread
 def open_webview(url):
     if not ANDROID:
@@ -204,6 +224,7 @@ class NumeracyApp(App):
         for name in ("home", "student", "tlogin", "trun"):
             self.sm.add_widget(Screen(name=name))
         self.show_home()
+        self.check_update()
         Window.bind(on_keyboard=self.on_key)
         return self.sm
 
@@ -224,6 +245,7 @@ class NumeracyApp(App):
         b.add_widget(big_button("I am the TEACHER (PIN)", BLUE, self.show_teacher_login))
         b.add_widget(big_button("I am a STUDENT", GREEN, self.show_student))
         b.add_widget(text("Teacher: this phone runs the drill for the class.\nStudent: join the teacher's drill.", 13, MUTED))
+        b.add_widget(text("v" + __version__, 12, MUTED))
         b.add_widget(Label())
         self.set_screen("home", b)
 
@@ -366,6 +388,25 @@ class NumeracyApp(App):
             self.host = None
         close_webview()
         self.show_home()
+
+    # ---- updates
+    def check_update(self):
+        def work():
+            info = updater.check(__version__)
+            if info:
+                Clock.schedule_once(lambda dt: self.offer_update(info), 0)
+        threading.Thread(target=work, daemon=True).start()
+
+    def offer_update(self, info):
+        if self.host is not None or _wv.get("view") is not None:
+            return  # never interrupt a running drill or an open page
+        from kivy.uix.popup import Popup
+        b = BoxLayout(orientation="vertical", padding=dp(16), spacing=dp(10))
+        b.add_widget(text("Version %s is available.\nThis tablet has %s." % (info["version"], __version__), 16, INK))
+        p = Popup(title="Update available", content=b, size_hint=(0.9, 0.45), auto_dismiss=False)
+        b.add_widget(big_button("Update now", GREEN, lambda: (p.dismiss(), open_url(info["url"])), 56))
+        b.add_widget(big_button("Later", GREY, p.dismiss, 48))
+        p.open()
 
     def popup_error(self, msg):
         from kivy.uix.popup import Popup
