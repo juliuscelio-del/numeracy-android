@@ -1,6 +1,13 @@
 """Checks GitHub Releases for a newer version of the Numeracy Drill app."""
 import json
+import ssl
 from urllib.request import urlopen, Request
+
+try:
+    import certifi
+    _CTX = ssl.create_default_context(cafile=certifi.where())
+except Exception:
+    _CTX = None
 
 REPO = "juliuscelio-del/numeracy-android"
 API = "https://api.github.com/repos/%s/releases/latest" % REPO
@@ -14,7 +21,7 @@ def check(current_version, timeout=5):
     """Return {'version', 'url'} if a newer release exists, else None. Never raises."""
     try:
         req = Request(API, headers={"User-Agent": "numeracy-updater"})
-        with urlopen(req, timeout=timeout) as r:
+        with urlopen(req, timeout=timeout, context=_CTX) as r:
             data = json.load(r)
         if _ver(data["tag_name"]) <= _ver(current_version):
             return None
