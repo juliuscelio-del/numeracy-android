@@ -140,6 +140,108 @@ def open_url(url):
         traceback.print_exc()
 
 
+# ---- in-app update: download with Android's DownloadManager, then open the system installer
+APK_NAME = "numeracy-update.apk"
+APK_MIME = "application/vnd.android.package-archive"
+
+
+def can_install_apks():
+    """True if the user already allowed this app to install APKs (Android 8+)."""
+    if not ANDROID:
+        return True
+    try:
+        return bool(_activity().getPackageManager().canRequestPackageInstalls())
+    except Exception:
+        traceback.print_exc()
+        return True
+
+
+def open_install_permission_settings():
+    """Opens the 'Install unknown apps' switch for this app."""
+    try:
+        Intent = autoclass("android.content.Intent")
+        Uri = autoclass("android.net.Uri")
+        Settings = autoclass("android.provider.Settings")
+        act = _activity()
+        act.startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                                 Uri.parse("package:" + act.getPackageName())))
+    except Exception:
+        traceback.print_exc()
+
+
+def cleanup_old_apk():
+    """Deletes a previously downloaded update file."""
+    if not ANDROID:
+        return
+    try:
+        File = autoclass("java.io.File")
+        Environment = autoclass("android.os.Environment")
+        d = _activity().getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
+        if d is not None:
+            f = File(d, APK_NAME)
+            if f.exists():
+                f.delete()
+    except Exception:
+        traceback.print_exc()
+
+
+def start_apk_download(url):
+    """Queues the APK in Android's DownloadManager. Returns the download id."""
+    Request = autoclass("android.app.DownloadManager$Request")
+    Uri = autoclass("android.net.Uri")
+    Context = autoclass("android.content.Context")
+    Environment = autoclass("android.os.Environment")
+    act = _activity()
+    req = Request(Uri.parse(url))
+    req.setTitle("Numeracy Drill update")
+    req.setMimeType(APK_MIME)
+    req.setDestinationInExternalFilesDir(act, Environment.DIRECTORY_DOWNLOADS, APK_NAME)
+    dm = act.getSystemService(Context.DOWNLOAD_SERVICE)
+    return dm.enqueue(req)
+
+
+def download_progress(did):
+    """Returns (status, bytes_done, bytes_total); status is 'running', 'done' or 'failed'."""
+    DM = autoclass("android.app.DownloadManager")
+    Query = autoclass("android.app.DownloadManager$Query")
+    Context = autoclass("android.content.Context")
+    dm = _activity().getSystemService(Context.DOWNLOAD_SERVICE)
+    q = Query()
+    try:
+        q.setFilterById([did])
+    except Exception:
+        q.setFilterById(did)
+    c = dm.query(q)
+    try:
+        if not c.moveToFirst():
+            return "failed", 0, 0
+        status = c.getInt(c.getColumnIndex(DM.COLUMN_STATUS))
+        done = c.getLong(c.getColumnIndex(DM.COLUMN_BYTES_DOWNLOADED_SO_FAR))
+        total = c.getLong(c.getColumnIndex(DM.COLUMN_TOTAL_SIZE_BYTES))
+    finally:
+        c.close()
+    if status == DM.STATUS_SUCCESSFUL:
+        return "done", done, total
+    if status == DM.STATUS_FAILED:
+        return "failed", done, total
+    return "running", done, total
+
+
+def install_downloaded_apk(did):
+    """Opens Android's installer for the downloaded APK."""
+    Intent = autoclass("android.content.Intent")
+    Context = autoclass("android.content.Context")
+    act = _activity()
+    dm = act.getSystemService(Context.DOWNLOAD_SERVICE)
+    uri = dm.getUriForDownloadedFile(did)
+    if uri is None:
+        raise RuntimeError("downloaded file not found")
+    i = Intent(Intent.ACTION_VIEW)
+    i.setDataAndType(uri, APK_MIME)
+    i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    act.startActivity(i)
+
+
 @run_on_ui_thread
 def open_webview(url):
     if not ANDROID:
@@ -327,6 +429,7 @@ class NumeracyApp(App):
     title = "Numeracy Drill"
 
     def build(self):
+        cleanup_old_apk()               # remove the update file left from the last install
         self.core_srv = None
         self.host = None
         self._blocking = False          # True while an update popup is on screen
@@ -526,14 +629,78 @@ class NumeracyApp(App):
 
     def offer_update(self, info):
         from kivy.uix.popup import Popup
+        self._upd = {"id": None, "ev": None, "state": "idle"}
         b = BoxLayout(orientation="vertical", padding=dp(16), spacing=dp(10))
-        b.add_widget(text("Version %s is available.\nThis tablet has %s.\n\nPlease update to continue."
-                          % (info["version"], __version__), 16, WHITE))
-        b.add_widget(big_button("Update now", GREEN, lambda: open_url(info["url"]), 56))
-        # no Later button, and the popup stays open after tapping Update now
-        p = Popup(title="Update available", content=b, size_hint=(0.9, 0.45), auto_dismiss=False)
+        self._upd_msg = text("Version %s is available.\nThis tablet has %s.\n\nPlease update to continue."
+                             % (info["version"], __version__), 16, WHITE)
+        b.add_widget(self._upd_msg)
+        self._upd_btn = big_button("Update now", GREEN, lambda: self.update_tap(info), 56)
+        b.add_widget(self._upd_btn)
+        # no Later button: the popup stays open until the new version is installed
+        p = Popup(title="Update available", content=b, size_hint=(0.9, 0.5), auto_dismiss=False)
         self._blocking = True
         p.open()
+
+    def update_tap(self, info):
+        st = self._upd["state"]
+        if st == "downloading":
+            return
+        if st == "ready":
+            self.install_update()
+            return
+        self.begin_update(info)
+
+    def begin_update(self, info):
+        if not ANDROID:
+            open_url(info["url"])
+            return
+        if not can_install_apks():
+            self._upd_msg.text = ("One-time step: turn ON \"Allow from this source\" for this app, "
+                                  "then come back and tap Update now.")
+            open_install_permission_settings()
+            return
+        try:
+            cleanup_old_apk()
+            self._upd["id"] = start_apk_download(info["url"])
+        except Exception as ex:
+            traceback.print_exc()
+            self._upd_msg.text = "Could not start the download:\n%s" % ex
+            return
+        self._upd["state"] = "downloading"
+        self._upd_btn.disabled = True
+        self._upd_btn.text = "Downloading..."
+        self._upd_msg.text = "Downloading version %s...  0%%" % info["version"]
+        self._upd["ev"] = Clock.schedule_interval(lambda dt: self.poll_update(info), 0.5)
+
+    def poll_update(self, info):
+        try:
+            status, done, total = download_progress(self._upd["id"])
+        except Exception:
+            traceback.print_exc()
+            status, done, total = "failed", 0, 0
+        if status == "running":
+            pct = int(done * 100 / total) if total > 0 else 0
+            self._upd_msg.text = "Downloading version %s...  %d%%" % (info["version"], pct)
+            return None
+        self._upd["ev"].cancel()
+        self._upd_btn.disabled = False
+        if status == "done":
+            self._upd["state"] = "ready"
+            self._upd_btn.text = "Install now"
+            self._upd_msg.text = "Download finished.\nTap Install on the next screen."
+            self.install_update()
+        else:
+            self._upd["state"] = "failed"
+            self._upd_btn.text = "Try again"
+            self._upd_msg.text = "Download failed. Check the Wi-Fi or data connection, then try again."
+        return False
+
+    def install_update(self):
+        try:
+            install_downloaded_apk(self._upd["id"])
+        except Exception as ex:
+            traceback.print_exc()
+            self._upd_msg.text = "Could not open the installer:\n%s" % ex
 
     def popup_error(self, msg):
         from kivy.uix.popup import Popup
