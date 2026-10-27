@@ -6,6 +6,8 @@ on:
 jobs:
   android:
     runs-on: ubuntu-22.04
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
 
@@ -26,6 +28,21 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install buildozer "cython==0.29.36" virtualenv setuptools
 
+      - name: Restore signing key
+        env:
+          KS: ${{ secrets.DEBUG_KEYSTORE_B64 }}
+        run: |
+          test -n "$KS" || { echo "DEBUG_KEYSTORE_B64 secret is missing"; exit 1; }
+          mkdir -p ~/.android
+          echo "$KS" | base64 -d > ~/.android/debug.keystore
+
+      - name: Stamp version
+        id: ver
+        run: |
+          V=$(grep -E '^version *=' buildozer.spec | head -1 | cut -d= -f2 | tr -d ' ')
+          echo "__version__ = \"$V\"" > _version.py
+          echo "v=$V" >> "$GITHUB_OUTPUT"
+
       - name: Cache Android tools
         uses: actions/cache@v4
         with:
@@ -41,3 +58,10 @@ jobs:
         with:
           name: Android-apk
           path: bin/*.apk
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.ver.outputs.v }}
+          name: Numeracy Drill ${{ steps.ver.outputs.v }}
+          files: bin/*.apk
