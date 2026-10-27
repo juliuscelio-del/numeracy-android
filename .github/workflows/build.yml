@@ -29,14 +29,6 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install buildozer "cython==0.29.36" virtualenv setuptools
 
-      - name: Restore signing key
-        env:
-          KS: ${{ secrets.DEBUG_KEYSTORE_B64 }}
-        run: |
-          test -n "$KS" || { echo "DEBUG_KEYSTORE_B64 secret is missing"; exit 1; }
-          mkdir -p ~/.android
-          echo "$KS" | base64 -d > ~/.android/debug.keystore
-
       - name: Cache Android tools
         uses: actions/cache@v4
         with:
@@ -56,8 +48,38 @@ jobs:
           echo "__version__ = \"$V\"" > _version.py
           echo "v=$V" >> "$GITHUB_OUTPUT"
 
-      - name: Build the APK
-        run: buildozer -v android debug
+      - name: Set version code
+        run: |
+          V=$(grep -E '^version *=' buildozer.spec | head -1 | cut -d= -f2 | tr -d ' ')
+          IFS=. read MAJ MIN PAT <<< "$V"
+          CODE=$((MAJ*10000 + MIN*100 + PAT))
+          sed -i '/^android.numeric_version/d' buildozer.spec
+          sed -i "/^version *=/a android.numeric_version = $CODE" buildozer.spec
+          echo "Version $V -> code $CODE"
+
+      - name: Build release APK
+        run: buildozer -v android release
+
+      - name: Sign APK
+        env:
+          KS: ${{ secrets.KEYSTORE_BASE64 }}
+          KS_PASS: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_PASS: ${{ secrets.KEY_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+        run: |
+          test -n "$KS" || { echo "KEYSTORE_BASE64 secret is missing"; exit 1; }
+          echo "$KS" | base64 -d > "$RUNNER_TEMP/release.keystore"
+          BT=$(ls -d ~/.buildozer/android/platform/android-sdk/build-tools/* | sort -V | tail -1)
+          UNSIGNED=$(ls bin/*-release-unsigned.apk)
+          "$BT/zipalign" -p -f 4 "$UNSIGNED" "$RUNNER_TEMP/aligned.apk"
+          "$BT/apksigner" sign \
+            --ks "$RUNNER_TEMP/release.keystore" \
+            --ks-key-alias "$KEY_ALIAS" \
+            --ks-pass env:KS_PASS --key-pass env:KEY_PASS \
+            --out "bin/gnhsnumeracy-${{ steps.ver.outputs.v }}.apk" \
+            "$RUNNER_TEMP/aligned.apk"
+          "$BT/apksigner" verify --print-certs "bin/gnhsnumeracy-${{ steps.ver.outputs.v }}.apk"
+          rm "$UNSIGNED" "$RUNNER_TEMP/release.keystore"
 
       - uses: actions/upload-artifact@v4
         with:
