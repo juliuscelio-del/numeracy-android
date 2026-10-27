@@ -331,14 +331,19 @@ def hsv(h, s=0.75, v=1.0, a=1.0):
 
 
 class VibrantDialog(ModalView):
-    """Dark glassy card with a colour-cycling glow border, a spinning ring and bouncing dots."""
+    """Dark glassy card with a colour-cycling glow border, a spinning ring and bouncing dots.
+    with_button=True adds a progress bar and a glowing button (used by the update popup)."""
 
-    def __init__(self, message, **kw):
-        super().__init__(size_hint=(0.88, None), height=dp(310), auto_dismiss=False,
+    def __init__(self, message, with_button=False, dlg_height=310, button_text="",
+                 on_button=None, **kw):
+        super().__init__(size_hint=(0.88, None), height=dp(dlg_height), auto_dismiss=False,
                          background="", background_color=(0, 0, 0, 0),
                          overlay_color=(0.05, 0.03, 0.16, 0.85), **kw)
         self._t = 0.0
         self._ev = None
+        self.progress = None            # None = hidden, 0.0 to 1.0 = filled
+        self.btn = None
+        self._with_button = with_button
 
         card = BoxLayout(orientation="vertical", padding=dp(24), spacing=dp(14))
         with card.canvas.before:
@@ -363,8 +368,8 @@ class VibrantDialog(ModalView):
         card.add_widget(self._ring)
 
         # message
-        self._msg = Label(text=message, font_size=sp(19), bold=True, halign="center", valign="middle",
-                          color=(1, 1, 1, 1))
+        self._msg = Label(text=message, font_size=sp(18 if with_button else 19), bold=True,
+                          halign="center", valign="middle", color=(1, 1, 1, 1))
         self._msg.bind(size=lambda w, s: setattr(w, "text_size", s))
         card.add_widget(self._msg)
 
@@ -376,6 +381,31 @@ class VibrantDialog(ModalView):
                 self._dot_c.append(Color(1, 1, 1, 1))
                 self._dot_e.append(Ellipse())
         card.add_widget(self._dots)
+
+        if with_button:
+            # progress bar
+            self._bar = Widget(size_hint_y=None, height=dp(12))
+            with self._bar.canvas:
+                Color(1, 1, 1, 0.12)
+                self._bar_bg = RoundedRectangle(radius=[dp(6)])
+                self._bar_c = Color(1, 0, 0.5, 1)
+                self._bar_fill = RoundedRectangle(radius=[dp(6)])
+            card.add_widget(self._bar)
+
+            # glowing rounded button
+            btn = Button(text=button_text, size_hint_y=None, height=dp(56), font_size=sp(18),
+                         bold=True, background_normal="", background_down="",
+                         background_color=(0, 0, 0, 0), color=(1, 1, 1, 1),
+                         disabled_color=(1, 1, 1, 0.75))
+            with btn.canvas.before:
+                self._btn_c = Color(0.1, 0.8, 0.4, 1)
+                self._btn_rect = RoundedRectangle(radius=[dp(28)])
+            btn.bind(pos=lambda w, v: setattr(self._btn_rect, "pos", v),
+                     size=lambda w, v: setattr(self._btn_rect, "size", v))
+            if on_button:
+                btn.bind(on_release=lambda *_: on_button())
+            self.btn = btn
+            card.add_widget(btn)
 
         card.bind(pos=self._layout, size=self._layout)
         self.add_widget(card)
@@ -424,6 +454,16 @@ class VibrantDialog(ModalView):
             self._dot_c[i].rgba = hsv(t * 0.12 + i * 0.12, 0.7, 1, 0.45 + 0.55 * bounce)
             self._dot_e[i].pos = (x0 + i * (d + gap), self._dots.y + dp(3) + bounce * dp(11))
             self._dot_e[i].size = (d, d)
+
+        if self._with_button:
+            bar = self._bar
+            self._bar_bg.pos = bar.pos
+            self._bar_bg.size = bar.size
+            self._bar_fill.pos = bar.pos
+            p = 0.0 if self.progress is None else max(0.0, min(1.0, self.progress))
+            self._bar_fill.size = (max(bar.width * p, dp(12) if p > 0 else 0), bar.height)
+            self._bar_c.rgba = hsv(t * 0.12 + 0.2, 0.8, 1, 1 if p > 0 else 0)
+            self._btn_c.rgba = hsv(t * 0.12 + 0.35, 0.8, 0.95, 0.6 if self.btn.disabled else 1)
 
 
 class NumeracyApp(App):
@@ -629,18 +669,18 @@ class NumeracyApp(App):
                              % (__version__, updater.last_tag or "?", updater.last_error or "none"))
 
     def offer_update(self, info):
-        from kivy.uix.popup import Popup
         self._upd = {"id": None, "ev": None, "state": "idle", "info": info}
-        b = BoxLayout(orientation="vertical", padding=dp(16), spacing=dp(10))
-        self._upd_msg = text("Version %s is available.\nThis tablet has %s.\n\nUpdating automatically..."
-                             % (info["version"], __version__), 16, WHITE)
-        b.add_widget(self._upd_msg)
-        self._upd_btn = big_button("Update now", GREEN, lambda: self.update_tap(info), 56)
-        b.add_widget(self._upd_btn)
+        dlg = VibrantDialog(
+            "Version %s is available.\nThis tablet has %s.\n\nUpdating automatically..."
+            % (info["version"], __version__),
+            with_button=True, dlg_height=440, button_text="Update now",
+            on_button=lambda: self.update_tap(info))
+        self._upd_dlg = dlg
+        self._upd_msg = dlg._msg        # same .text interface as before
+        self._upd_btn = dlg.btn         # same .text / .disabled interface as before
         # no Later button: the popup stays open until the new version is installed
-        p = Popup(title="Update available", content=b, size_hint=(0.9, 0.5), auto_dismiss=False)
         self._blocking = True
-        p.open()
+        dlg.open()
         # start the download by itself, no tap needed
         Clock.schedule_once(lambda dt: self.begin_update(info), 0.5)
 
@@ -685,8 +725,10 @@ class NumeracyApp(App):
         if status == "running":
             pct = int(done * 100 / total) if total > 0 else 0
             self._upd_msg.text = "%s\n%d%%" % (UPDATING_TEXT, pct)
+            self._upd_dlg.progress = pct / 100.0
             return None
         self._upd["ev"].cancel()
+        self._upd_dlg.progress = 1.0 if status == "done" else None
         self._upd_btn.disabled = False
         if status == "done":
             self._upd["state"] = "ready"
