@@ -5,7 +5,7 @@ package.domain = ph.edu.gnhs
 source.dir = .
 source.include_exts = py,png,jpg,kv,atlas
 version = 1.0.1
-requirements = python3,kivy==2.3.0,pyjnius,android
+requirements = python3,kivy==2.3.0,pyjnius,android,openssl,certifi
 orientation = portrait
 fullscreen = 0
 icon.filename = %(source.dir)s/icon.png
